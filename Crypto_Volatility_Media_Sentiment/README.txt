@@ -12,10 +12,11 @@ The core approach applies an EGARCH model to capture volatility dynamics, buildi
 financial market behaviour. The model incorporates media sentiment as an explanatory variable both in level and change form.
 
 ## Code
-The R script implementing the EGARCH model and data preprocessing is provided, refer to BASE_LogReturn_EGARCH_Model.
+The R script implementing the EGARCH model and data preprocessing is provided, refer to BASE_LogReturn_EGARCH_Model. R-Markdown is required to run and implement the code.
 
 ## Status
 Work in progress. Manuscript draft is under development.
 
 ## Contact
 For questions or collaboration inquiries, please contact Pieter Nel (piedanel@gmail.com).
+
