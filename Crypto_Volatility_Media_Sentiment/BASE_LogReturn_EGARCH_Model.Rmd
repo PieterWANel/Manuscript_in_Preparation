@@ -1,0 +1,591 @@
+---
+title: "Base_LogReturn_EGARCH_Model"
+author: "Pieter_Nel"
+date: "`r Sys.Date()`"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Load Libraries
+```{r, include=FALSE}
+
+library(dplyr)
+library(xts)
+library(quantmod)
+library(stargazer)
+library(readxl)
+library(ggplot2)
+library(rugarch)
+library(tseries)
+library(forecast)
+library(PerformanceAnalytics)
+library(reshape2)
+library(knitr)
+library(kableExtra)
+
+```
+
+Create the Index Data frame to help analysis
+```{r, include=FALSE}
+
+file_path <- "G:/My Drive/2025/Master's/Research/POC/u18274171_Index_Sheet.xlsx"
+
+SPX_df <- read_excel(file_path, sheet = "S&P_500_Index")
+DJX_df <- read_excel(file_path, sheet = "Dow_Jones_Index")
+NQX_df <- read_excel(file_path, sheet = "NasDaq_100_Index")
+EPUIX_DF <- read_excel(file_path, sheet = "EPUIX")
+  #Clean and Convert Date
+  EPUIX_DF <- EPUIX_DF %>%
+  rename(
+    Date = observation_date,
+    EPUIX_Level = USEPUINDXD
+  )
+
+```
+
+Cleaning the Return Index Data Frames
+```{r, include=TRUE}
+
+#Convert Date Colum
+SPX_df$Date <- as.Date(SPX_df$Date)
+DJX_df$Date <- as.Date(DJX_df$Date)
+NQX_df$Date <- as.Date(NQX_df$Date)
+
+#Sort Each DF
+SPX_df <- SPX_df %>% arrange(Date)
+DJX_df <- DJX_df %>% arrange(Date)
+NQX_df <- NQX_df %>% arrange(Date)
+
+#XTS for Time Series
+XTS_SPX_df    <- xts(SPX_df$Close, order.by = SPX_df$Date)
+XTS_DJX_df <- xts(DJX_df$Close, order.by = DJX_df$Date)
+XTS_NQX_df   <- xts(NQX_df$Close, order.by = NQX_df$Date)
+
+#Get Log Returns
+log_SPX_df    <- diff(log(XTS_SPX_df) %>% na.omit())
+log_DJX_df   <- diff(log(XTS_DJX_df) %>% na.omit())
+log_NQX_df <- diff(log(XTS_NQX_df) %>% na.omit())
+
+#Return log returns to data frame
+log_SPX_df <- data.frame(Date = index(log_SPX_df), coredata(log_SPX_df))
+  colnames(log_SPX_df)[2] <- "log_return"
+log_DJX_df <- data.frame(Date = index(log_DJX_df), coredata(log_DJX_df))
+  colnames(log_DJX_df)[2] <- "log_return"
+log_NQX_df <- data.frame(Date = index(log_NQX_df), coredata(log_NQX_df))
+  colnames(log_NQX_df)[2] <- "log_return"
+
+```
+
+Clean the UIX data frame
+```{r, include=FALSE}
+
+#Clean and Convert Date
+EPUIX_DF <- EPUIX_DF %>%
+  mutate(Date = as.Date(EPUIX_DF$Date)) %>%
+  arrange(Date)
+
+#Create First Diff
+EPUIX_DF <- EPUIX_DF %>%
+  mutate(EPUIX_diff = c(NA, diff(EPUIX_Level)))
+
+#Create Log EPU
+EPUIX_DF <- EPUIX_DF %>%
+  arrange(EPUIX_DF$Date) %>%
+  mutate(
+    log_EPUIX = log(EPUIX_Level),                            
+    logDiff_EPUIX = c(NA, 100 * diff(log(EPUIX_Level))) 
+  )
+
+epu_data <- data.frame(Date = EPUIX_DF$Date,
+                       log_EPUIX = EPUIX_DF$log_EPUIX,
+                       logDiff_EPUIX = EPUIX_DF$logDiff_EPUIX)
+
+epu_melt <- melt(epu_data, id = "Date")
+
+```
+
+Create Functions to Use
+```{r, include=TRUE}
+
+# Function to create EGARCH specification
+egarch_spec_function <- function() {
+  ugarchspec(
+    variance.model = list(model = "eGARCH", garchOrder = c(1, 1)),
+    mean.model = list(armaOrder = c(1, 0), include.mean = TRUE, external.regressors = NULL),
+    distribution.model = "norm"
+  )
+}
+
+# Prepare data without date alignment (assumes data is already aligned by row)
+prepare_data_no_alignment <- function(log_SPX_df, log_DJX_df, log_NQX_df, EPUIX_DF) {
+  
+  # Check dimensions
+  cat("Original data dimensions:\n")
+  cat("SPX:", nrow(log_SPX_df), "observations\n")
+  cat("DJX:", nrow(log_DJX_df), "observations\n") 
+  cat("NQX:", nrow(log_NQX_df), "observations\n")
+  cat("EPUIX:", nrow(EPUIX_DF), "observations\n\n")
+  
+  # Remove first row from all datasets to handle NA in first log return
+  cat("Removing first row from all datasets (first log return is typically NA)...\n")
+  log_SPX_df <- log_SPX_df[-1, ]
+  log_DJX_df <- log_DJX_df[-1, ]
+  log_NQX_df <- log_NQX_df[-1, ]
+  EPUIX_DF <- EPUIX_DF[-1, ]
+  
+  cat("After removing first row:\n")
+  cat("SPX:", nrow(log_SPX_df), "observations\n")
+  cat("DJX:", nrow(log_DJX_df), "observations\n") 
+  cat("NQX:", nrow(log_NQX_df), "observations\n")
+  cat("EPUIX:", nrow(EPUIX_DF), "observations\n\n")
+  
+  # Check column names
+  cat("Column names:\n")
+  cat("SPX columns:", paste(colnames(log_SPX_df), collapse = ", "), "\n")
+  cat("DJX columns:", paste(colnames(log_DJX_df), collapse = ", "), "\n")
+  cat("NQX columns:", paste(colnames(log_NQX_df), collapse = ", "), "\n")
+  cat("EPUIX columns:", paste(colnames(EPUIX_DF), collapse = ", "), "\n\n")
+  
+  # Verify all have same number of observations
+  n_obs <- c(nrow(log_SPX_df), nrow(log_DJX_df), nrow(log_NQX_df), nrow(EPUIX_DF))
+  
+  if(length(unique(n_obs)) != 1) {
+    stop("Error: Datasets have different numbers of observations: ", paste(n_obs, collapse = ", "))
+  }
+  
+  cat("All datasets have", n_obs[1], "observations after cleanup.\n\n")
+
+  # Extract return series (by row position, not date matching)
+  Y_list <- list(
+    SPX = log_SPX_df$log_return,
+    DJX = log_DJX_df$log_return,  
+    NQX = log_NQX_df$log_return
+  )
+  
+  # Create external regressor matrix
+  x_reg <- cbind(
+    log_EPUIX = EPUIX_DF$log_EPUIX,
+    logDiff_EPUIX = EPUIX_DF$logDiff_EPUIX
+  )
+  
+  # Check for missing values
+  cat("Checking for missing values:\n")
+  for(name in names(Y_list)) {
+    n_na <- sum(is.na(Y_list[[name]]))
+    if(n_na > 0) {
+      cat("Warning:", name, "has", n_na, "missing values\n")
+    } else {
+      cat(name, ": No missing values\n")
+    }
+  }
+  
+  n_na_reg <- sum(is.na(x_reg))
+  if(n_na_reg > 0) {
+    cat("Warning: External regressors have", n_na_reg, "missing values\n")
+  } else {
+    cat("External regressors: No missing values\n")
+  }
+  
+  cat("\nExternal regressor matrix dimensions:", nrow(x_reg), "x", ncol(x_reg), "\n")
+  cat("External regressor summary:\n")
+  print(summary(x_reg))
+  
+  return(list(Y_list = Y_list, x_reg = x_reg))
+}
+
+# Fit EGARCH models with external regressors
+fit_egarch_models_aligned <- function(Y_list, x_reg) {
+  
+  cat("\n=== FITTING EGARCH MODELS ===\n\n")
+  
+  fit_models <- list()
+  
+  for(name in names(Y_list)) {
+    cat("Fitting EGARCH model for", name, "...\n")
+    
+    y <- as.numeric(Y_list[[name]])
+    
+    # Create specification with external regressors
+    spec <- ugarchspec(
+      variance.model = list(model = "eGARCH", garchOrder = c(1, 1)),
+      mean.model = list(armaOrder = c(1, 0), include.mean = TRUE, external.regressors = x_reg),
+      distribution.model = "norm"
+    )
+    
+    # Fit model with error handling
+    fit_result <- tryCatch({
+      fit <- ugarchfit(spec = spec, data = y, solver = "hybrid")
+      
+      # Check convergence
+      conv_code <- convergence(fit)
+      converged <- conv_code == 0
+      
+      if(!converged) {
+        cat("  Warning: Convergence code =", conv_code, "\n")
+        # Try alternative solver
+        cat("  Trying alternative solver...\n")
+        fit <- ugarchfit(spec = spec, data = y, solver = "solnp")
+        conv_code <- convergence(fit)
+        converged <- conv_code == 0
+      }
+      
+      list(
+        name = name,
+        fit = fit, 
+        converged = converged,
+        convergence_code = conv_code,
+        error = NULL
+      )
+      
+    }, error = function(e) {
+      cat("  Error:", e$message, "\n")
+      list(
+        name = name,
+        fit = NULL,
+        converged = FALSE,
+        convergence_code = NA,
+        error = e$message
+      )
+    })
+    
+    fit_models[[name]] <- fit_result
+    
+    if(fit_result$converged) {
+      cat("  Successfully fitted!\n")
+    } else {
+      cat("  Failed to converge or fit\n")
+    }
+    cat("\n")
+  }
+  
+  return(fit_models)
+}
+
+# Extract and display results
+display_results <- function(fit_models) {
+  
+  cat("=== MODEL RESULTS ===\n\n")
+  
+  results_list <- list()
+  
+  for(name in names(fit_models)) {
+    model <- fit_models[[name]]
+    
+    cat("--- Results for", name, "---\n")
+    
+    if(!is.null(model$fit) && model$converged) {
+      fit <- model$fit
+      
+      # Display coefficients
+      coef_vec <- coef(fit)
+      cat("Coefficients:\n")
+      print(round(coef_vec, 6))
+      
+      # Standard errors
+      se_vec <- tryCatch({
+        sqrt(diag(vcov(fit)))
+      }, error = function(e) {
+        cat("Could not compute standard errors\n")
+        rep(NA, length(coef_vec))
+      })
+      
+      # t-statistics
+      if(!any(is.na(se_vec))) {
+        t_stats <- coef_vec / se_vec
+        cat("\nT-statistics:\n")
+        print(round(t_stats, 4))
+      }
+      
+      # Model fit statistics
+      cat("\nModel Diagnostics:\n")
+      cat("Log-likelihood:", round(likelihood(fit), 4), "\n")
+      
+      ic <- infocriteria(fit)
+      cat("AIC:", round(ic[1], 4), "\n")
+      cat("BIC:", round(ic[2], 4), "\n")
+      
+      # Store results
+      results_list[[name]] <- list(
+        coefficients = coef_vec,
+        std_errors = se_vec,
+        t_statistics = if(!any(is.na(se_vec))) t_stats else NULL,
+        loglik = likelihood(fit),
+        aic = ic[1],
+        bic = ic[2],
+        fit_object = fit
+      )
+      
+    } else {
+      cat("Model failed to fit or converge\n")
+      if(!is.null(model$error)) {
+        cat("Error message:", model$error, "\n")
+      }
+      results_list[[name]] <- list(success = FALSE, error = model$error)
+    }
+    
+    cat("\n", paste(rep("=", 50), collapse = ""), "\n\n")
+  }
+  
+  return(results_list)
+}
+
+# Extract and display results with detailed coefficients
+display_results <- function(fit_models) {
+  
+  cat("=== MODEL RESULTS ===\n\n")
+  
+  results_list <- list()
+  
+  for(name in names(fit_models)) {
+    model <- fit_models[[name]]
+    
+    cat("--- Results for", name, "---\n")
+    
+    if(!is.null(model$fit) && model$converged) {
+      fit <- model$fit
+      
+      # Extract coefficients
+      coef_vec <- coef(fit)
+      cat("Model fitted using:", model$method, "\n\n")
+      
+      # Separate mean and variance equation coefficients
+      mean_coef_names <- c("mu", "ar1", "mxreg1", "mxreg2")  # Common mean equation names
+      variance_coef_names <- c("omega", "alpha1", "beta1", "gamma1")  # eGARCH variance equation names
+      
+      coef_names <- names(coef_vec)
+      
+      # Display Mean Equation Coefficients
+      cat("MEAN EQUATION COEFFICIENTS:\n")
+      cat(paste(rep("=", 35), collapse = ""), "\n")
+      
+      for(coef_name in coef_names) {
+        if(grepl("mu|ar|mxreg", coef_name, ignore.case = TRUE)) {
+          coef_val <- coef_vec[coef_name]
+          
+          # Get description of coefficient
+          coef_desc <- switch(coef_name,
+            "mu" = "Intercept (mean return)",
+            "ar1" = "AR(1) coefficient", 
+            "mxreg1" = "log_EPUIX coefficient",
+            "mxreg2" = "logDiff_EPUIX coefficient",
+            paste("External regressor:", coef_name)
+          )
+          
+          cat(sprintf("  %-20s = %12.6f  (%s)\n", coef_name, coef_val, coef_desc))
+        }
+      }
+      
+      cat("\nVARIANCE EQUATION COEFFICIENTS:\n")
+      cat(paste(rep("=", 35), collapse = ""), "\n")
+      
+      for(coef_name in coef_names) {
+        if(grepl("omega|alpha|beta|gamma", coef_name, ignore.case = TRUE)) {
+          coef_val <- coef_vec[coef_name]
+          
+          # Get description of coefficient
+          coef_desc <- switch(coef_name,
+            "omega" = "Intercept (log variance)",
+            "alpha1" = "ARCH effect (|z|)",
+            "beta1" = "GARCH effect (log σ²)",
+            "gamma1" = "Asymmetry effect (z)",
+            paste("Variance parameter:", coef_name)
+          )
+          
+          cat(sprintf("  %-20s = %12.6f  (%s)\n", coef_name, coef_val, coef_desc))
+        }
+      }
+      
+      # Calculate and display standard errors and t-statistics
+      se_vec <- tryCatch({
+        sqrt(diag(vcov(fit)))
+      }, error = function(e) {
+        cat("\nCould not compute standard errors:", e$message, "\n")
+        rep(NA, length(coef_vec))
+      })
+      
+      if(!any(is.na(se_vec))) {
+        t_stats <- coef_vec / se_vec
+        p_values <- 2 * (1 - pnorm(abs(t_stats)))
+        
+        cat("\nSTATISTICAL SIGNIFICANCE:\n")
+        cat(paste(rep("=", 50), collapse = ""), "\n")
+        cat(sprintf("%-20s %12s %10s %10s %8s\n", "Coefficient", "Estimate", "Std.Error", "t-value", "p-value"))
+        cat(paste(rep("-", 62), collapse = ""), "\n")
+        
+        for(i in 1:length(coef_vec)) {
+          significance <- if(p_values[i] < 0.001) "***" else 
+                        if(p_values[i] < 0.01) "**" else 
+                        if(p_values[i] < 0.05) "*" else 
+                        if(p_values[i] < 0.1) "." else ""
+          
+          cat(sprintf("%-20s %12.6f %10.6f %10.3f %8.4f %s\n", 
+                     names(coef_vec)[i], coef_vec[i], se_vec[i], t_stats[i], p_values[i], significance))
+        }
+        
+        cat("\nSignificance codes: 0 '***' 0.001 '**' 0.01 '*' 0.05 '.' 0.1 ' ' 1\n")
+      }
+      
+      # Interpretation of EPU coefficients (if present)
+      if(any(grepl("mxreg", names(coef_vec)))) {
+        cat("\nECONOMIC POLICY UNCERTAINTY INTERPRETATION:\n")
+        cat(paste(rep("=", 45), collapse = ""), "\n")
+        
+        if("mxreg1" %in% names(coef_vec)) {
+          epu_level_coef <- coef_vec["mxreg1"]
+          epu_level_effect <- if(epu_level_coef > 0) "increases" else "decreases"
+          cat(sprintf("• log_EPUIX coefficient = %.6f\n", epu_level_coef))
+          cat(sprintf("  A 1%% increase in EPU level %s expected returns by %.4f%%\n", 
+                     epu_level_effect, abs(epu_level_coef)))
+        }
+        
+        if("mxreg2" %in% names(coef_vec)) {
+          epu_change_coef <- coef_vec["mxreg2"]
+          epu_change_effect <- if(epu_change_coef > 0) "increases" else "decreases"
+          cat(sprintf("• logDiff_EPUIX coefficient = %.6f\n", epu_change_coef))
+          cat(sprintf("  A 1 unit increase in EPU change %s expected returns by %.4f%%\n", 
+                     epu_change_effect, abs(epu_change_coef * 100)))
+        }
+      }
+      
+      # Model diagnostics
+      cat("\nMODEL DIAGNOSTICS:\n")
+      cat(paste(rep("=", 25), collapse = ""), "\n")
+      cat(sprintf("Log-likelihood: %12.4f\n", likelihood(fit)))
+      
+      ic <- infocriteria(fit)
+      cat(sprintf("AIC:            %12.4f\n", ic[1]))
+      cat(sprintf("BIC:            %12.4f\n", ic[2]))
+      cat(sprintf("Shibata:        %12.4f\n", ic[3]))
+      cat(sprintf("Hannan-Quinn:   %12.4f\n", ic[4]))
+      
+      # Persistence measures for variance equation
+      if("beta1" %in% names(coef_vec)) {
+        persistence <- coef_vec["beta1"]
+        cat(sprintf("Volatility persistence: %.4f", persistence))
+        if(persistence > 0.99) {
+          cat(" (Very high - near unit root)")
+        } else if(persistence > 0.95) {
+          cat(" (High persistence)")
+        } else if(persistence > 0.8) {
+          cat(" (Moderate persistence)")
+        } else {
+          cat(" (Low persistence)")
+        }
+        cat("\n")
+      }
+      
+      # Store detailed results
+      results_list[[name]] <- list(
+        coefficients = coef_vec,
+        std_errors = se_vec,
+        t_statistics = if(!any(is.na(se_vec))) t_stats else NULL,
+        p_values = if(!any(is.na(se_vec))) p_values else NULL,
+        loglik = likelihood(fit),
+        aic = ic[1],
+        bic = ic[2],
+        shibata = ic[3],
+        hannan_quinn = ic[4],
+        fit_object = fit,
+        method_used = model$method
+      )
+      
+    } else {
+      cat("Model failed to fit or converge\n")
+      if(!is.null(model$error)) {
+        cat("Error message:", model$error, "\n")
+      }
+      results_list[[name]] <- list(success = FALSE, error = model$error, method_used = model$method)
+    }
+    
+    cat("\n", paste(rep("=", 80), collapse = ""), "\n\n")
+  }
+  
+  return(results_list)
+}
+
+# Create comparison table
+create_comparison_table <- function(fit_models) {
+  
+  comparison_df <- data.frame(
+    Index = character(),
+    Converged = logical(),
+    LogLik = numeric(),
+    AIC = numeric(), 
+    BIC = numeric(),
+    N_Params = integer(),
+    stringsAsFactors = FALSE
+  )
+  
+  for(name in names(fit_models)) {
+    model <- fit_models[[name]]
+    
+    if(!is.null(model$fit) && model$converged) {
+      fit <- model$fit
+      ic <- infocriteria(fit)
+      
+      comparison_df <- rbind(comparison_df, data.frame(
+        Index = name,
+        Converged = TRUE,
+        LogLik = round(likelihood(fit), 4),
+        AIC = round(ic[1], 4),
+        BIC = round(ic[2], 4), 
+        N_Params = length(coef(fit)),
+        stringsAsFactors = FALSE
+      ))
+    } else {
+      comparison_df <- rbind(comparison_df, data.frame(
+        Index = name,
+        Converged = FALSE,
+        LogLik = NA,
+        AIC = NA,
+        BIC = NA,
+        N_Params = NA,
+        stringsAsFactors = FALSE
+      ))
+    }
+  }
+  
+  cat("\n=== MODEL COMPARISON ===\n")
+  print(comparison_df)
+  cat("\n")
+  
+  return(comparison_df)
+}
+
+# Main execution function
+run_egarch_analysis <- function(log_SPX_df, log_DJX_df, log_NQX_df, EPUIX_DF) {
+  
+  cat("=== EGARCH ANALYSIS WITH EPU REGRESSORS ===\n\n")
+  
+  # Step 1: Prepare data
+  data_prep <- prepare_data_no_alignment(log_SPX_df, log_DJX_df, log_NQX_df, EPUIX_DF)
+  
+  # Step 2: Fit models  
+  fit_models <- fit_egarch_models_aligned(data_prep$Y_list, data_prep$x_reg)
+  
+  # Step 3: Display results
+  results <- display_results(fit_models)
+  
+  # Step 4: Create comparison
+  comparison <- create_comparison_table(fit_models)
+  
+  # Return everything
+  return(list(
+    #data = data_prep,
+    models = fit_models,
+    results = results,
+    comparison = comparison
+  ))
+}
+
+```
+
+Running the Model
+```{r, include=False}
+
+analysis <- run_egarch_analysis(log_SPX_df, log_DJX_df, log_NQX_df, EPUIX_DF)
+
+```
